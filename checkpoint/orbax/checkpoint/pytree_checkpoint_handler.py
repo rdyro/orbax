@@ -69,7 +69,7 @@ get_param_names = base_pytree_checkpoint_handler.get_param_names
 
 _CHECKPOINT_FILE = 'checkpoint'
 _METADATA_FILE = base_pytree_checkpoint_handler.METADATA_FILE
-_DEFAULT_CONCURRENT_GB = 96
+_DEFAULT_CONCURRENT_GB = 192
 
 
 def _maybe_set_default_restore_args(args):
