@@ -440,6 +440,7 @@ async def async_serialize_shards(
       context=context,
       transaction=transaction,
   )
+  print(t)
   write_shard_coros = jax.tree.map(
       functools.partial(
           _write_shard,

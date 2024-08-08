@@ -25,6 +25,7 @@ import re
 import time
 from typing import Any, Callable, cast, Dict, List, Optional, Protocol, Sequence, Tuple, Union
 import warnings
+import math
 
 from absl import logging
 from etils import epath
@@ -258,6 +259,13 @@ class RestoreArgs:
   dtype: Optional[jnp.dtype] = None
 
 
+def _find_divisors(size: int):
+  """Fast-ish method for finding divisors of a number."""
+  sqrt_divs = [i for i in range(1, math.ceil(math.sqrt(size + 1))) if size % i == 0]
+  # this might yield duplicates, but this is ok, we avoid sorted(list(set(...)))
+  return sqrt_divs + [size // div for div in sqrt_divs][::-1]
+
+
 def _choose_chunk_shape(
     global_shape: Sequence[int],
     write_shape: Sequence[int],
@@ -294,9 +302,7 @@ def _choose_chunk_shape(
   rank = len(write_shape)
 
   # `dim_factors[i]` is the list of divisors of `write_shape[i]`
-  dim_factors = [
-      [i for i in range(1, size + 1) if size % i == 0] for size in write_shape
-  ]
+  dim_factors = [_find_divisors(size) for size in write_shape]
 
   # The current chunk shape is:
   # [dim_factors[i][-1] for i in range(rank)]
@@ -412,6 +418,23 @@ def get_json_tspec_write(
   tspec['metadata'] = {
       'shape': global_shape,
   }
+
+  # check if the chunk size would exceed ocdbt target file size
+  chunk_byte_size = arg.chunk_byte_size if arg else None
+  if use_ocdbt:
+    ocdbt_target_data_file_size = info.ocdbt_target_data_file_size
+    if ocdbt_target_data_file_size is None:
+      # from https://google.github.io/tensorstore/kvstore/ocdbt/index.html
+      ocdbt_target_data_file_size = 2147483648 
+    if chunk_byte_size is None:
+      if math.prod(local_shape) * dtype.itemsize > ocdbt_target_data_file_size:
+        chunk_byte_size = ocdbt_target_data_file_size
+      else:
+        # Let chunk_byte_size stay None
+        chunk_byte_size = None
+    else:
+      chunk_byte_size = min(chunk_byte_size, ocdbt_target_data_file_size)
+
   tspec['metadata'].update(
       _build_ts_zarr_shard_and_chunk_metadata(
           global_shape=global_shape,
@@ -420,7 +443,7 @@ def get_json_tspec_write(
           use_zarr3=info.use_zarr3,
           write_chunk_shape=arg.write_chunk_shape if arg else None,
           read_chunk_shape=arg.read_chunk_shape if arg else None,
-          chunk_byte_size=arg.chunk_byte_size if arg else None,
+          chunk_byte_size=chunk_byte_size,
       )
   )
   if use_ocdbt:
@@ -438,19 +461,24 @@ def _build_ts_zarr_shard_and_chunk_metadata(
     chunk_byte_size: Optional[int] = None,
 ) -> Dict[Any, Any]:
   """This function returns the TS metadata for write spec."""
-  if (
-      write_chunk_shape or read_chunk_shape or chunk_byte_size
-  ) and not use_zarr3:
+
+  if (write_chunk_shape or read_chunk_shape) and not use_zarr3:
     raise ValueError(
-        'Zarr3 is not enabled when `write_chunk_shape`, `read_chunk_shape` or'
-        ' `chunk_byte_size` is specified.'
+        'Zarr3 is not enabled when `write_chunk_shape`, `read_chunk_shape`'
+        ' is specified.'
     )
 
   metadata = {}
 
   if not use_zarr3:
     # Zarr ver2
-    metadata['chunks'] = np.array(np.maximum(1, shard_shape))
+    if chunk_byte_size is not None:
+      metadata['chunks'] = _choose_chunk_shape(
+        global_shape, shard_shape, dtype, chunk_byte_size
+      )
+      print(f"\n\n\nChose a chunk shape equal to: {metadata['chunks']}")
+    else:
+      metadata['chunks'] = np.array(np.maximum(1, shard_shape))
     metadata['compressor'] = {'id': 'zstd'}
   else:
     # Zarr ver3
