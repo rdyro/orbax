@@ -1815,6 +1815,7 @@ class StringHandler(TypeHandler):
             open=True,
             context=self._ts_context,
         )
+        print(t)
         write_future = t.with_transaction(txn).write(value)
         synchronous_ops += [write_future.copy]
     await asyncio.gather(*synchronous_ops)
@@ -1838,6 +1839,7 @@ class StringHandler(TypeHandler):
       open_future = ts.open(
           tspec, open=True, read=True, context=self._ts_context
       )
+      print(t)
       open_futures += [open_future]
     tensorstores = await asyncio.gather(*open_futures)
     read_ops = [self._convert_to_string(t) for t in tensorstores]
